@@ -22,6 +22,7 @@ function initFirebase() {
   db = firebase.firestore();
   console.log('Firebase initialized');
   
+  
   // Set up auth state listener after Firebase is initialized
   auth1.onAuthStateChanged(async (user) => {
     if (user) {
