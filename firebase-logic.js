@@ -235,19 +235,36 @@ async function initStudentDashboard() {
 // Initialize teacher dashboard - UPDATED WITH PROPER FIRESTORE RULES
 async function initTeacherDashboard() {
   try {
-    console.log('Initializing teacher dashboard...');
+    console.log('═══════════════════════════════════════');
+    console.log('🎓 Initializing Teacher Dashboard...');
+    console.log('═══════════════════════════════════════');
     
     if (!currentUser) {
-      console.error('Cannot init teacher dashboard - no current user');
+      console.error('❌ Cannot init teacher dashboard - no current user');
+      const studentListEl = document.getElementById('teacher-student-list');
+      if (studentListEl) {
+        studentListEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--muted);font-size:0.88rem;grid-column:1/-1;">⚠️ Error: User not authenticated</div>';
+      }
       return;
     }
 
-    console.log('Fetching all documents from users collection...');
+    console.log('👤 Current user:', currentUser.uid);
+    console.log('🔄 Fetching all documents from users collection...');
     
     // This will work if Firestore rules allow teachers to read the users collection
     // The rule needed is: match /users/{document=**} { allow read: if request.auth != null; }
-    const usersSnapshot = await db.collection('users').get();
-    console.log('✓ Users snapshot received:', usersSnapshot.docs.length, 'documents');
+    let usersSnapshot;
+    try {
+      usersSnapshot = await db.collection('users').get();
+      console.log('✅ Users snapshot received:', usersSnapshot.docs.length, 'documents');
+    } catch (firestoreError) {
+      console.error('❌ Firestore error:', firestoreError.code, firestoreError.message);
+      const studentListEl = document.getElementById('teacher-student-list');
+      if (studentListEl) {
+        studentListEl.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:0.88rem;grid-column:1/-1;">⚠️ Firestore Error: ${firestoreError.message}</div>`;
+      }
+      throw firestoreError;
+    }
     
     const students = [];
     let totalProgress = 0;
@@ -257,11 +274,11 @@ async function initTeacherDashboard() {
       const userData = docSnap.data();
       const userId = docSnap.id;
       
-      console.log(`Processing user ${userId}:`, userData.role);
+      console.log(`📝 Processing user ${userId}:`, userData.role);
       
       // Only process students
       if (userData.role !== 'student') {
-        console.log(`Skipping non-student: ${userData.email} (role: ${userData.role})`);
+        console.log(`⏭️  Skipping non-student: ${userData.email} (role: ${userData.role})`);
         continue;
       }
       
@@ -270,7 +287,7 @@ async function initTeacherDashboard() {
         const progressSnap = await db.collection('student_progress').doc(userId).get();
         const progress = progressSnap.exists ? progressSnap.data() : { ankle: 0, knee: 0, terminology: 0 };
         
-        console.log(`Student ${userData.email} progress:`, progress);
+        console.log(`📊 Student ${userData.email} progress:`, progress);
         
         students.push({
           id: userId,
@@ -281,7 +298,7 @@ async function initTeacherDashboard() {
         
         totalProgress += ((progress.ankle || 0) + (progress.knee || 0) + (progress.terminology || 0)) / 3;
       } catch (progressError) {
-        console.error(`Error fetching progress for ${userId}:`, progressError);
+        console.error(`❌ Error fetching progress for ${userId}:`, progressError);
         // Still add student but with zero progress
         students.push({
           id: userId,
@@ -292,7 +309,18 @@ async function initTeacherDashboard() {
       }
     }
 
-    console.log('Found', students.length, 'students');
+    console.log(`✅ Found ${students.length} students`);
+
+    if (students.length === 0) {
+      console.warn('⚠️  No students found! Make sure:');
+      console.warn('  1. Students exist in the "users" collection');
+      console.warn('  2. Their role field is set to "student"');
+      console.warn('  3. Firestore security rules allow reading');
+      const studentListEl = document.getElementById('teacher-student-list');
+      if (studentListEl) {
+        studentListEl.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:0.88rem;grid-column:1/-1;">📭 No students found. Check Firestore database.</div>`;
+      }
+    }
 
     const avgProgress = students.length > 0 ? Math.round(totalProgress / students.length) : 0;
 
@@ -301,41 +329,96 @@ async function initTeacherDashboard() {
     const activeNowEl = document.getElementById('teacher-active-now');
     const avgProgressEl = document.getElementById('teacher-avg-progress');
     
-    console.log('Updating stats elements...');
+    console.log('📈 Updating stats elements...');
     
     if (totalStudentsEl) {
       totalStudentsEl.textContent = students.length;
-      console.log('✓ Total students updated:', students.length);
+      console.log('✅ Total students updated:', students.length);
     }
     if (activeNowEl) {
       activeNowEl.textContent = Math.max(1, Math.floor(students.length * 0.6));
-      console.log('✓ Active now updated');
+      console.log('✅ Active now updated');
     }
     if (avgProgressEl) {
       avgProgressEl.textContent = avgProgress + '%';
-      console.log('✓ Avg progress updated:', avgProgress);
+      console.log('✅ Avg progress updated:', avgProgress);
     }
 
-    // Populate student list
+    // Populate student list with cards
     const studentListHTML = students.map(s => {
       const anklePercent = s.progress.ankle || 0;
       const kneePercent = s.progress.knee || 0;
       const terminologyPercent = s.progress.terminology || 0;
+      const overallPercent = Math.round((anklePercent + kneePercent + terminologyPercent) / 3);
+      
+      // Determine status color
+      let statusColor = '#e03131'; // red
+      let statusLabel = 'Just Started';
+      if (overallPercent >= 75) {
+        statusColor = '#2f9e44'; // green
+        statusLabel = 'Nearly Complete';
+      } else if (overallPercent >= 50) {
+        statusColor = '#f59f00'; // yellow
+        statusLabel = 'In Progress';
+      } else if (overallPercent > 0) {
+        statusColor = '#1a3db5'; // blue
+        statusLabel = 'Started';
+      }
+      
+      const studentName = s.name && s.name !== 'undefined' ? s.name : s.email.split('@')[0];
       
       return `
-      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:0;border-bottom:1px solid var(--border);align-items:center;padding:0;">
-        <div style="padding:14px 18px;font-size:0.86rem;color:var(--text);">${s.name}</div>
-        <div style="padding:14px 18px;text-align:center;">
-          <div class="mini-progress" style="width:100%;margin-bottom:4px;"><div class="mini-fill" style="width:${anklePercent}%;background:var(--royal);height:4px;"></div></div>
-          <span style="font-size:0.72rem;color:var(--muted);">${anklePercent}%</span>
+      <div class="teacher-student-card">
+        <div class="teacher-card-header">
+          <div>
+            <div class="teacher-card-name">${studentName}</div>
+            <div class="teacher-card-email">${s.email}</div>
+          </div>
+          <div class="teacher-status-badge" style="background-color: ${statusColor};">${statusLabel}</div>
         </div>
-        <div style="padding:14px 18px;text-align:center;">
-          <div class="mini-progress" style="width:100%;margin-bottom:4px;"><div class="mini-fill" style="width:${kneePercent}%;background:var(--royal);height:4px;"></div></div>
-          <span style="font-size:0.72rem;color:var(--muted);">${kneePercent}%</span>
+        
+        <div class="teacher-overall-progress">
+          <div class="teacher-progress-percent">${overallPercent}%</div>
+          <div style="flex: 1;">
+            <div class="teacher-progress-label">Overall Progress</div>
+            <div class="teacher-progress-bar">
+              <div class="teacher-progress-fill" style="width: ${overallPercent}%;"></div>
+            </div>
+          </div>
         </div>
-        <div style="padding:14px 18px;text-align:center;">
-          <div class="mini-progress" style="width:100%;margin-bottom:4px;"><div class="mini-fill" style="width:${terminologyPercent}%;background:var(--royal);height:4px;"></div></div>
-          <span style="font-size:0.72rem;color:var(--muted);">${terminologyPercent}%</span>
+        
+        <div class="teacher-chapter-title">Chapter Progress</div>
+        
+        <div>
+          <div class="teacher-chapter-item">
+            <div class="teacher-chapter-header">
+              <span class="teacher-chapter-name">Ankle Anatomy</span>
+              <span class="teacher-chapter-percent">${anklePercent}%</span>
+            </div>
+            <div class="teacher-mini-bar">
+              <div class="teacher-progress-fill" style="width: ${anklePercent}%;"></div>
+            </div>
+          </div>
+          
+          <div class="teacher-chapter-item">
+            <div class="teacher-chapter-header">
+              <span class="teacher-chapter-name">Knee Anatomy</span>
+              <span class="teacher-chapter-percent">${kneePercent}%</span>
+            </div>
+            <div class="teacher-mini-bar">
+              <div class="teacher-progress-fill" style="width: ${kneePercent}%;"></div>
+            </div>
+          </div>
+          
+          <div class="teacher-chapter-item">
+            <div class="teacher-chapter-header">
+              <span class="teacher-chapter-name">Medical Terms</span>
+              <span class="teacher-chapter-percent">${terminologyPercent}%</span>
+            </div>
+            <div class="teacher-mini-bar">
+              <div class="teacher-progress-fill" style="width: ${terminologyPercent}%;"></div>
+            </div>
+          </div>
         </div>
       </div>
     `;
@@ -389,15 +472,21 @@ async function initTeacherDashboard() {
     const chaptersEl = document.getElementById('teacher-chapters');
     if (chaptersEl) {
       chaptersEl.innerHTML = chaptersHTML;
-      console.log('✓ Chapters updated');
+      console.log('✅ Chapters updated');
     }
 
-    console.log('✓ Teacher dashboard initialized successfully');
+    console.log('═══════════════════════════════════════');
+    console.log('✅ Teacher dashboard initialized successfully');
+    console.log('═══════════════════════════════════════');
     
   } catch (error) {
-    console.error('❌ Error initializing teacher dashboard:', error);
+    console.error('═══════════════════════════════════════');
+    console.error('❌ Error initializing teacher dashboard');
+    console.error('═══════════════════════════════════════');
     console.error('Error code:', error.code);
     console.error('Error message:', error.message);
+    console.error('Stack:', error.stack);
+    console.error('═══════════════════════════════════════');
     
     // IMPORTANT: Show helpful error message
     const errorEl = document.getElementById('teacher-student-list');
