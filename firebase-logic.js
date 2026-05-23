@@ -1,5 +1,3 @@
-
-
 var firebaseConfig = {
   apiKey: "AIzaSyCIt7GDbMDrqj4fnwk2uF4NwOQnxTEJFH8",
   authDomain: "fir-f2cd1.firebaseapp.com",
@@ -23,6 +21,29 @@ function initFirebase() {
   auth1 = firebase.auth();
   db = firebase.firestore();
   console.log('Firebase initialized');
+  
+  // Set up auth state listener after Firebase is initialized
+  auth1.onAuthStateChanged(async (user) => {
+    if (user) {
+      console.log('User signed in:', user.uid);
+      currentUser = user;
+      try {
+        const userDocSnap = await db.collection('users').doc(user.uid).get();
+        if (userDocSnap.exists) {
+          currentUserData = userDocSnap.data();
+          currentUserRole = currentUserData.role;
+          console.log('User role:', currentUserRole);
+        }
+      } catch (error) {
+        console.error('Error fetching user data:', error);
+      }
+    } else {
+      console.log('User signed out');
+      currentUser = null;
+      currentUserRole = null;
+      currentUserData = null;
+    }
+  });
 }
 
 // Global state
@@ -63,19 +84,19 @@ async function handleLogin() {
     
     // Sign in with Firebase Auth
     const userCredential = await auth1.signInWithEmailAndPassword(email, password);
-    // const userCredential = await signInWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
     console.log('Auth successful, UID:', user.uid);
 
     // Get user data from Firestore
     const userDocSnap = await db.collection('users').doc(user.uid).get();
 
-    if (userDocSnap.exists()) {
+    if (userDocSnap.exists) {
       const userData = userDocSnap.data();
       console.log('User data found:', userData);
       
       // Verify role matches
       if (userData.role !== selectedRole) {
+        console.warn(`Role mismatch: User role is '${userData.role}' but selected role is '${selectedRole}'`);
         showError(`This account is registered as a ${userData.role}, not a ${selectedRole}`);
         await auth1.signOut();
         return;
@@ -90,23 +111,36 @@ async function handleLogin() {
       const navMain = document.getElementById('nav-main');
       const navAuth = document.getElementById('nav-auth');
       const userNameDisplay = document.getElementById('user-name-display');
+      const studentDashboardLink = document.getElementById('nav-student-dashboard');
+      const teacherDashboardLink = document.getElementById('nav-teacher-dashboard');
       
-      if (navMain) navMain.style.display = 'none';
+      if (navMain) navMain.style.display = 'flex';
       if (navAuth) navAuth.style.display = 'flex';
       if (userNameDisplay) userNameDisplay.textContent = userData.name || email.split('@')[0];
+      
+      // Show/hide dashboard links based on role
+      if (studentDashboardLink) studentDashboardLink.style.display = userData.role === 'student' ? 'block' : 'none';
+      if (teacherDashboardLink) teacherDashboardLink.style.display = userData.role === 'teacher' ? 'block' : 'none';
 
       // Hide login page
       const loginPage = document.getElementById('page-login');
-      if (loginPage) loginPage.classList.remove('active');
+      if (loginPage) {
+        loginPage.classList.remove('active');
+        loginPage.style.display = 'none';
+      }
       if (errorDiv) errorDiv.style.display = 'none';
 
       // Show appropriate dashboard
       if (userData.role === 'teacher') {
+        console.log('Routing to teacher dashboard');
         showPage('teacher');
-        initTeacherDashboard();
+        // Use setTimeout to ensure page is rendered before initializing
+        setTimeout(() => initTeacherDashboard(), 100);
       } else {
+        console.log('Routing to student dashboard');
         showPage('dashboard');
-        initStudentDashboard();
+        // Use setTimeout to ensure page is rendered before initializing
+        setTimeout(() => initStudentDashboard(), 100);
       }
       
       console.log('Login successful for', userData.role);
@@ -139,10 +173,14 @@ async function logout() {
     const navMain = document.getElementById('nav-main');
     const navAuth = document.getElementById('nav-auth');
     const loginPage = document.getElementById('page-login');
+    const studentDashboardLink = document.getElementById('nav-student-dashboard');
+    const teacherDashboardLink = document.getElementById('nav-teacher-dashboard');
     
     if (navMain) navMain.style.display = 'flex';
     if (navAuth) navAuth.style.display = 'none';
     if (loginPage) loginPage.classList.add('active');
+    if (studentDashboardLink) studentDashboardLink.style.display = 'block';
+    if (teacherDashboardLink) teacherDashboardLink.style.display = 'none';
     
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     if (loginPage) loginPage.style.display = 'flex';
@@ -162,50 +200,99 @@ async function logout() {
 // Initialize student dashboard
 async function initStudentDashboard() {
   try {
-    if (!currentUser) return;
+    if (!currentUser) {
+      console.warn('Cannot init student dashboard - no current user');
+      return;
+    }
+    
+    console.log('Initializing student dashboard for:', currentUser.uid);
+    
+    // Ensure progress document exists in Firestore
+    const progressRef = db.collection('student_progress').doc(currentUser.uid);
+    const progressSnap = await progressRef.get();
+    
+    if (!progressSnap.exists) {
+      // Create initial progress document
+      console.log('Creating new progress document for user:', currentUser.uid);
+      await progressRef.set({
+        ankle: 0,
+        knee: 0,
+        terminology: 0,
+        userId: currentUser.uid,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      console.log('Progress document created');
+    }
     
     // Load student's progress from Firestore
-    const progressSnap = await db.collection('student_progress').doc(currentUser.uid).get();
+    await loadStudentProgress();
     
-    if (progressSnap.exists()) {
-      const progressData = progressSnap.data();
-      console.log('Student progress loaded:', progressData);
-      // Update progress in the page
-      if (window.updateStudentProgress) {
-        window.updateStudentProgress(progressData);
-      }
-    }
   } catch (error) {
-    console.error('Error loading student progress:', error);
+    console.error('Error initializing student dashboard:', error);
   }
 }
 
-// Initialize teacher dashboard
+// Initialize teacher dashboard - UPDATED WITH PROPER FIRESTORE RULES
 async function initTeacherDashboard() {
   try {
-    // Get all students
-    const studentsSnapshot = await db.collection('users').where('role', '==', 'student').get();
+    console.log('Initializing teacher dashboard...');
+    
+    if (!currentUser) {
+      console.error('Cannot init teacher dashboard - no current user');
+      return;
+    }
+
+    console.log('Fetching all documents from users collection...');
+    
+    // This will work if Firestore rules allow teachers to read the users collection
+    // The rule needed is: match /users/{document=**} { allow read: if request.auth != null; }
+    const usersSnapshot = await db.collection('users').get();
+    console.log('✓ Users snapshot received:', usersSnapshot.docs.length, 'documents');
     
     const students = [];
     let totalProgress = 0;
 
-    for (const docSnap of studentsSnapshot.docs) {
-      const student = docSnap.data();
-      const studentId = docSnap.id;
+    // Iterate through all users and find students
+    for (const docSnap of usersSnapshot.docs) {
+      const userData = docSnap.data();
+      const userId = docSnap.id;
       
-      // Get student's progress
-      const progressSnap = await db.collection('student_progress').doc(studentId).get();
-      const progress = progressSnap.exists() ? progressSnap.data() : { ankle: 0, knee: 0, terminology: 0 };
+      console.log(`Processing user ${userId}:`, userData.role);
       
-      students.push({
-        id: studentId,
-        name: student.name || student.email,
-        email: student.email,
-        progress: progress
-      });
+      // Only process students
+      if (userData.role !== 'student') {
+        console.log(`Skipping non-student: ${userData.email} (role: ${userData.role})`);
+        continue;
+      }
       
-      totalProgress += ((progress.ankle || 0) + (progress.knee || 0) + (progress.terminology || 0)) / 3;
+      try {
+        // Get student's progress
+        const progressSnap = await db.collection('student_progress').doc(userId).get();
+        const progress = progressSnap.exists ? progressSnap.data() : { ankle: 0, knee: 0, terminology: 0 };
+        
+        console.log(`Student ${userData.email} progress:`, progress);
+        
+        students.push({
+          id: userId,
+          name: userData.name || userData.email,
+          email: userData.email,
+          progress: progress
+        });
+        
+        totalProgress += ((progress.ankle || 0) + (progress.knee || 0) + (progress.terminology || 0)) / 3;
+      } catch (progressError) {
+        console.error(`Error fetching progress for ${userId}:`, progressError);
+        // Still add student but with zero progress
+        students.push({
+          id: userId,
+          name: userData.name || userData.email,
+          email: userData.email,
+          progress: { ankle: 0, knee: 0, terminology: 0 }
+        });
+      }
     }
+
+    console.log('Found', students.length, 'students');
 
     const avgProgress = students.length > 0 ? Math.round(totalProgress / students.length) : 0;
 
@@ -214,23 +301,52 @@ async function initTeacherDashboard() {
     const activeNowEl = document.getElementById('teacher-active-now');
     const avgProgressEl = document.getElementById('teacher-avg-progress');
     
-    if (totalStudentsEl) totalStudentsEl.textContent = students.length;
-    if (activeNowEl) activeNowEl.textContent = Math.max(1, Math.floor(students.length * 0.6));
-    if (avgProgressEl) avgProgressEl.textContent = avgProgress + '%';
+    console.log('Updating stats elements...');
+    
+    if (totalStudentsEl) {
+      totalStudentsEl.textContent = students.length;
+      console.log('✓ Total students updated:', students.length);
+    }
+    if (activeNowEl) {
+      activeNowEl.textContent = Math.max(1, Math.floor(students.length * 0.6));
+      console.log('✓ Active now updated');
+    }
+    if (avgProgressEl) {
+      avgProgressEl.textContent = avgProgress + '%';
+      console.log('✓ Avg progress updated:', avgProgress);
+    }
 
     // Populate student list
-    const studentListHTML = students.map(s => `
-      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:0;border-bottom:1px solid var(--border);align-items:center;">
+    const studentListHTML = students.map(s => {
+      const anklePercent = s.progress.ankle || 0;
+      const kneePercent = s.progress.knee || 0;
+      const terminologyPercent = s.progress.terminology || 0;
+      
+      return `
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:0;border-bottom:1px solid var(--border);align-items:center;padding:0;">
         <div style="padding:14px 18px;font-size:0.86rem;color:var(--text);">${s.name}</div>
-        <div style="padding:14px 18px;text-align:center;"><div class="mini-progress" style="width:100%;"><div class="mini-fill" style="width:${s.progress.ankle || 0}%;background:var(--royal)"></div></div><span style="font-size:0.72rem;color:var(--muted);">${s.progress.ankle || 0}%</span></div>
-        <div style="padding:14px 18px;text-align:center;"><div class="mini-progress" style="width:100%;"><div class="mini-fill" style="width:${s.progress.knee || 0}%;background:var(--royal)"></div></div><span style="font-size:0.72rem;color:var(--muted);">${s.progress.knee || 0}%</span></div>
-        <div style="padding:14px 18px;text-align:center;"><div class="mini-progress" style="width:100%;"><div class="mini-fill" style="width:${s.progress.terminology || 0}%;background:var(--royal)"></div></div><span style="font-size:0.72rem;color:var(--muted);">${s.progress.terminology || 0}%</span></div>
+        <div style="padding:14px 18px;text-align:center;">
+          <div class="mini-progress" style="width:100%;margin-bottom:4px;"><div class="mini-fill" style="width:${anklePercent}%;background:var(--royal);height:4px;"></div></div>
+          <span style="font-size:0.72rem;color:var(--muted);">${anklePercent}%</span>
+        </div>
+        <div style="padding:14px 18px;text-align:center;">
+          <div class="mini-progress" style="width:100%;margin-bottom:4px;"><div class="mini-fill" style="width:${kneePercent}%;background:var(--royal);height:4px;"></div></div>
+          <span style="font-size:0.72rem;color:var(--muted);">${kneePercent}%</span>
+        </div>
+        <div style="padding:14px 18px;text-align:center;">
+          <div class="mini-progress" style="width:100%;margin-bottom:4px;"><div class="mini-fill" style="width:${terminologyPercent}%;background:var(--royal);height:4px;"></div></div>
+          <span style="font-size:0.72rem;color:var(--muted);">${terminologyPercent}%</span>
+        </div>
       </div>
-    `).join('');
+    `;
+    }).join('');
 
     const studentListEl = document.getElementById('teacher-student-list');
     if (studentListEl) {
       studentListEl.innerHTML = studentListHTML || '<div style="padding:24px;text-align:center;color:var(--muted);font-size:0.88rem;">No students yet</div>';
+      console.log('✓ Student list updated');
+    } else {
+      console.warn('Student list element not found!');
     }
 
     // Populate chapter details
@@ -263,82 +379,246 @@ async function initTeacherDashboard() {
           <span class="badge level2">Chapter 3</span>
         </div>
         <h3>Medical Terminology</h3>
-        <p>Essential language for athletic trainers. Learn anatomical and injury terms.</p>
+        <p>Essential medical terms used in athletic training. Build your professional vocabulary.</p>
         <div class="skill-meta">
           <span>${students.length} students in class</span>
         </div>
       </div>
     `;
-    
-    const chaptersEl = document.getElementById('teacher-chapters');
-    if (chaptersEl) chaptersEl.innerHTML = chaptersHTML;
 
-    console.log('Teacher dashboard initialized with', students.length, 'students');
+    const chaptersEl = document.getElementById('teacher-chapters');
+    if (chaptersEl) {
+      chaptersEl.innerHTML = chaptersHTML;
+      console.log('✓ Chapters updated');
+    }
+
+    console.log('✓ Teacher dashboard initialized successfully');
+    
   } catch (error) {
-    console.error('Error loading teacher dashboard:', error);
+    console.error('❌ Error initializing teacher dashboard:', error);
+    console.error('Error code:', error.code);
+    console.error('Error message:', error.message);
+    
+    // IMPORTANT: Show helpful error message
+    const errorEl = document.getElementById('teacher-student-list');
+    if (errorEl) {
+      let helpText = 'Check browser console (F12) for details.<br>';
+      
+      if (error.code === 'permission-denied') {
+        helpText += '<strong>⚠️ Firestore Permission Error</strong><br>';
+        helpText += 'Your Firestore security rules don\'t allow reading the users collection.<br>';
+        helpText += 'Go to Firebase Console → Firestore → Rules and use the SETUP guide.';
+      }
+      
+      errorEl.innerHTML = `<div style="padding:24px;text-align:center;color:var(--red);font-size:0.88rem;">
+        <strong>Error loading dashboard:</strong><br/>
+        ${error.message}<br/>
+        <small style="color:var(--muted);">${helpText}</small>
+      </div>`;
+    }
   }
 }
 
-// Update student progress (called when student completes sections)
-async function updateStudentProgress(chapter, sectionNum, isComplete) {
-  if (!currentUser || currentUserRole !== 'student') return;
+// Update student progress
+async function updateStudentProgress(chapter, sectionIndex) {
+  if (!currentUser) {
+    console.error('Cannot update progress - not logged in');
+    return;
+  }
 
   try {
+    console.log(`Updating progress for chapter: ${chapter}, section: ${sectionIndex}`);
+    
+    // Map chapter names to progress fields
+    const progressKey = chapter.toLowerCase();
+    
+    // Get current progress
     const progressRef = db.collection('student_progress').doc(currentUser.uid);
     const progressSnap = await progressRef.get();
     
-    let currentProgress = {};
-    if (progressSnap.exists()) {
-      currentProgress = progressSnap.data();
+    if (!progressSnap.exists) {
+      console.error('Progress document does not exist');
+      return;
+    }
+    
+    const currentProgress = progressSnap.data();
+    
+    // Calculate progress increment (4 sections per chapter = 25% each)
+    // Only increment if not already at 100%
+    if ((currentProgress[progressKey] || 0) < 100) {
+      currentProgress[progressKey] = Math.min(100, (currentProgress[progressKey] || 0) + 25);
     }
 
-    // Calculate progress percentage for the chapter
-    const progressKey = chapter.toLowerCase();
-    if (!currentProgress[progressKey]) {
-      currentProgress[progressKey] = 0;
-    }
-
-    // Increment progress (simplified: add 25% per section, max 100%)
-    if (isComplete) {
-      currentProgress[progressKey] = Math.min(100, currentProgress[progressKey] + 25);
-    }
-
-    // Save to Firestore
-    await progressRef.set({
+    // Build update object
+    const updateData = {
       ...currentProgress,
       lastUpdated: firebase.firestore.FieldValue.serverTimestamp(),
       userId: currentUser.uid
-    }, { merge: true });
+    };
+    
+    console.log('Saving to Firestore:', updateData);
 
-    console.log(`Progress updated for ${chapter}: ${currentProgress[progressKey]}%`);
+    // Save to Firestore with timestamp
+    await progressRef.set(updateData, { merge: true });
+
+    console.log(`✓ Progress saved to Firestore for ${chapter}: ${currentProgress[progressKey]}%`);
+    
+    // Reload progress from DB to ensure UI is in sync
+    await loadStudentProgress();
+    
   } catch (error) {
-    console.error('Error updating progress:', error);
+    console.error('❌ Error updating progress:', error);
+    console.error('Error details:', error.code, error.message);
   }
 }
 
-// Auth state observer
-if (typeof firebase !== 'undefined') {
-  firebase.auth().onAuthStateChanged(async (user) => {
-    if (user) {
-      console.log('User signed in:', user.uid);
-      currentUser = user;
-      try {
-        const userDocSnap = await firebase.firestore().collection('users').doc(user.uid).get();
-        if (userDocSnap.exists()) {
-          currentUserData = userDocSnap.data();
-          currentUserRole = currentUserData.role;
-          console.log('User role:', currentUserRole);
+// Load student progress from Firestore
+async function loadStudentProgress() {
+  if (!currentUser) {
+    console.warn('No current user');
+    return;
+  }
+
+  try {
+    const progressSnap = await db.collection('student_progress').doc(currentUser.uid).get();
+    
+    if (progressSnap.exists) {
+      const progressData = progressSnap.data();
+      console.log('✓ Progress loaded from Firestore:', progressData);
+      
+      // Update the progress object in index.html if it exists
+      if (window.progress) {
+        // Clear existing completed to avoid duplicates
+        window.progress.completed.clear();
+        window.progress.inProgress.clear();
+        
+        // Mark completed modules (those at 100%)
+        if (progressData.ankle === 100) {
+          window.progress.completed.add('ankle');
+          console.log('✓ Ankle marked as complete');
+        } else if (progressData.ankle > 0) {
+          window.progress.inProgress.add('ankle');
         }
-      } catch (error) {
-        console.error('Error fetching user data:', error);
+        
+        if (progressData.knee === 100) {
+          window.progress.completed.add('knee');
+          console.log('✓ Knee marked as complete');
+        } else if (progressData.knee > 0) {
+          window.progress.inProgress.add('knee');
+        }
+        
+        if (progressData.terminology === 100) {
+          window.progress.completed.add('terminology');
+          console.log('✓ Terminology marked as complete');
+        } else if (progressData.terminology > 0) {
+          window.progress.inProgress.add('terminology');
+        }
+        
+        // Update dashboard stats
+        if (window.updateDashboardStats) {
+          window.updateDashboardStats();
+          console.log('✓ Dashboard stats updated');
+        }
+        
+        // Update progress bars with actual percentages
+        if (window.updateAllProgressBars) {
+          window.updateAllProgressBars(progressData);
+          console.log('✓ Progress bars updated');
+        }
       }
     } else {
-      console.log('User signed out');
-      currentUser = null;
-      currentUserRole = null;
-      currentUserData = null;
+      console.log('No progress document found yet for user:', currentUser.uid);
     }
-  });
+  } catch (error) {
+    console.error('❌ Error loading progress from Firestore:', error);
+  }
+}
+
+// Update progress bar UI from database
+function updateModuleCardUIfromDB(progressData) {
+  if (!progressData) return;
+  
+  // Update ankle progress bar
+  if (progressData.ankle === 100) {
+    document.querySelectorAll('[onclick*="ankle"]').forEach(el => {
+      const fillEl = el.querySelector('.mini-fill');
+      if (fillEl) {
+        fillEl.style.width = '100%';
+        fillEl.style.background = 'var(--green)';
+      }
+    });
+    const ankleDot = document.querySelector('[onclick*="ankle"] .sidebar-dot');
+    if (ankleDot) ankleDot.style.background = 'var(--green)';
+  }
+  
+  // Update knee progress bar
+  if (progressData.knee === 100) {
+    document.querySelectorAll('[onclick*="knee"]').forEach(el => {
+      const fillEl = el.querySelector('.mini-fill');
+      if (fillEl) {
+        fillEl.style.width = '100%';
+        fillEl.style.background = 'var(--green)';
+      }
+    });
+    const kneeDot = document.querySelector('[onclick*="knee"] .sidebar-dot');
+    if (kneeDot) kneeDot.style.background = 'var(--green)';
+  }
+  
+  // Update terminology progress bar
+  if (progressData.terminology === 100) {
+    document.querySelectorAll('[onclick*="terminology"]').forEach(el => {
+      const fillEl = el.querySelector('.mini-fill');
+      if (fillEl) {
+        fillEl.style.width = '100%';
+        fillEl.style.background = 'var(--green)';
+      }
+    });
+    const terminologyDot = document.querySelector('[onclick*="terminology"] .sidebar-dot');
+    if (terminologyDot) terminologyDot.style.background = 'var(--green)';
+  }
+}
+
+// Update all progress bars with percentages
+function updateAllProgressBars(progressData) {
+  console.log('updateAllProgressBars called with:', progressData);
+  
+  if (!progressData) return;
+  
+  // Update ankle progress
+  if (progressData.ankle !== undefined) {
+    document.querySelectorAll('[onclick*="ankle"] .mini-fill').forEach(el => {
+      el.style.width = progressData.ankle + '%';
+      if (progressData.ankle === 100) {
+        el.style.background = 'var(--green)';
+      } else if (progressData.ankle > 0) {
+        el.style.background = 'var(--royal)';
+      }
+    });
+  }
+  
+  // Update knee progress
+  if (progressData.knee !== undefined) {
+    document.querySelectorAll('[onclick*="knee"] .mini-fill').forEach(el => {
+      el.style.width = progressData.knee + '%';
+      if (progressData.knee === 100) {
+        el.style.background = 'var(--green)';
+      } else if (progressData.knee > 0) {
+        el.style.background = 'var(--royal)';
+      }
+    });
+  }
+  
+  // Update terminology progress
+  if (progressData.terminology !== undefined) {
+    document.querySelectorAll('[onclick*="terminology"] .mini-fill').forEach(el => {
+      el.style.width = progressData.terminology + '%';
+      if (progressData.terminology === 100) {
+        el.style.background = 'var(--green)';
+      } else if (progressData.terminology > 0) {
+        el.style.background = 'var(--royal)';
+      }
+    });
+  }
 }
 
 // Make functions globally accessible
@@ -346,6 +626,9 @@ window.handleLogin = handleLogin;
 window.logout = logout;
 window.setRole = setRole;
 window.updateStudentProgress = updateStudentProgress;
+window.loadStudentProgress = loadStudentProgress;
+window.updateModuleCardUIfromDB = updateModuleCardUIfromDB;
+window.updateAllProgressBars = updateAllProgressBars;
 window.initTeacherDashboard = initTeacherDashboard;
 window.initStudentDashboard = initStudentDashboard;
 
@@ -376,11 +659,10 @@ function setupEventListeners() {
   console.log('Event listeners set up');
 }
 
-// if (document.readyState === 'loading') {
-//   document.addEventListener('DOMContentLoaded', setupEventListeners);
-// } else {
-//   setupEventListeners();
-// }
+// Set default role to student
+if (!sessionStorage.getItem('selectedRole')) {
+  sessionStorage.setItem('selectedRole', 'student');
+}
 
 window.addEventListener('load', () => {
     console.log("Window fully loaded. Initializing systems...");

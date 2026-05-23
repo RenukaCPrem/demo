@@ -992,7 +992,8 @@
 <nav>
   <div class="logo">AT<span>las</span></div>
   <ul class="nav-links" id="nav-main">
-    <li><a href="#" class="active" onclick="showPage('dashboard',this);return false;">Dashboard</a></li>
+    <li><a href="#" class="active" onclick="showPage('dashboard',this);return false;" id="nav-student-dashboard">Dashboard</a></li>
+    <li><a href="#" onclick="showPage('teacher',this);return false;" id="nav-teacher-dashboard" style="display:none;">Teacher Dashboard</a></li>
     <li><a href="#" onclick="showPage('quickref',this);return false;">Quick Reference</a></li>
   </ul>
   <ul class="nav-links" id="nav-auth" style="display:none;gap:12px;">
@@ -1405,14 +1406,15 @@
   </main>
 </div>
 
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-analytics.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-analytics-compat.js"></script>
 
 
 <!-- Our Firebase Logic -->
 <script src="firebase-logic.js" defer></script>
+<script>
 const skills = {
   ankle: {
     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="#1a3db5" stroke-width="2"><path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/><path d="M8 12H5a2 2 0 0 0-2 2v6h18v-6a2 2 0 0 0-2-2h-3"/><line x1="12" y1="12" x2="12" y2="22"/></svg>',
@@ -1466,6 +1468,18 @@ function showPage(name, linkEl) {
   
   document.querySelectorAll('.nav-links a').forEach(a => a.classList.remove('active'));
   if (linkEl) linkEl.classList.add('active');
+  
+  // Reload progress when returning to dashboard (for students)
+  if (name === 'dashboard' && currentUserRole === 'student' && window.loadStudentProgress) {
+    console.log('Loading progress from DB for dashboard');
+    window.loadStudentProgress();
+  }
+  
+  // Reload teacher dashboard when viewing
+  if (name === 'teacher' && currentUserRole === 'teacher' && window.initTeacherDashboard) {
+    console.log('Loading teacher dashboard');
+    window.initTeacherDashboard();
+  }
 }
 
 function showSkillDetail(skillKey) {
@@ -1765,6 +1779,41 @@ function updateModuleCardUI(key) {
       if (dot) dot.style.background = 'var(--green)';
     }
   });
+}
+
+// Update all progress bars from progress data
+function updateAllProgressBars(progressData) {
+  console.log('Updating all progress bars with:', progressData);
+  
+  // Update ankle progress
+  if (progressData && progressData.ankle !== undefined) {
+    document.querySelectorAll('[onclick*="ankle"] .mini-fill').forEach(el => {
+      el.style.width = progressData.ankle + '%';
+      if (progressData.ankle === 100) {
+        el.style.background = 'var(--green)';
+      }
+    });
+  }
+  
+  // Update knee progress
+  if (progressData && progressData.knee !== undefined) {
+    document.querySelectorAll('[onclick*="knee"] .mini-fill').forEach(el => {
+      el.style.width = progressData.knee + '%';
+      if (progressData.knee === 100) {
+        el.style.background = 'var(--green)';
+      }
+    });
+  }
+  
+  // Update terminology progress
+  if (progressData && progressData.terminology !== undefined) {
+    document.querySelectorAll('[onclick*="terminology"] .mini-fill').forEach(el => {
+      el.style.width = progressData.terminology + '%';
+      if (progressData.terminology === 100) {
+        el.style.background = 'var(--green)';
+      }
+    });
+  }
 }
 
 
