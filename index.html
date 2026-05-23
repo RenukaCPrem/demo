@@ -1479,7 +1479,7 @@
     </div>
 
     <!-- TEACHER VIEW PAGE -->
-    <div id="page-teacher" class="page" style="display:none;">
+    <div id="page-teacher" class="page" >
       <div class="dashboard-header">
         <div class="greeting">Welcome back, Teacher</div>
         <h1>Student Progress <span>Tracker</span></h1>
@@ -1573,6 +1573,16 @@ function showPage(name, linkEl) {
   const targetPage = document.getElementById('page-' + name);
   if (targetPage) {
     targetPage.classList.add('active');
+  }
+  
+  // Hide sidebar for teacher dashboard, show for other pages
+  const sidebar = document.querySelector('.sidebar');
+  if (sidebar) {
+    if (name === 'teacher') {
+      sidebar.style.display = 'none';
+    } else {
+      sidebar.style.display = '';
+    }
   }
   
   document.querySelectorAll('.nav-links a').forEach(a => a.classList.remove('active'));

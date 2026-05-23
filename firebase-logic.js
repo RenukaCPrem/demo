@@ -135,12 +135,18 @@ async function handleLogin() {
         console.log('Routing to teacher dashboard');
         showPage('teacher');
         // Use setTimeout to ensure page is rendered before initializing
-        setTimeout(() => initTeacherDashboard(), 100);
+        setTimeout(() => {
+          console.log('Now calling initTeacherDashboard after page render');
+          initTeacherDashboard();
+        }, 200);
       } else {
         console.log('Routing to student dashboard');
         showPage('dashboard');
         // Use setTimeout to ensure page is rendered before initializing
-        setTimeout(() => initStudentDashboard(), 100);
+        setTimeout(() => {
+          console.log('Now calling initStudentDashboard after page render');
+          initStudentDashboard();
+        }, 200);
       }
       
       console.log('Login successful for', userData.role);
